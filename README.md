@@ -1,10 +1,10 @@
 # Search marketplace documents without crossing buyer boundaries
 
-Filter by marketplace visibility before you rank by similarity. In a postmortem, we'd call a leaked handoff for another buyer's order a severity-1 privacy incident. This example ships the filtered text to Infrai through the OpenAI-compatible `base_url`, so one `INFRAI_API_KEY` covers the embedding call. The boundary logic stays plain Python, which we can unit test offline without poking the network.
+The decision comes first: filter documents by marketplace visibility before measuring semantic similarity, because a highly relevant handoff for somebody else's order must never become a search result. This example sends the remaining text to Infrai through the OpenAI-compatible `base_url`, so one `INFRAI_API_KEY` covers the embedding call while the domain rule stays ordinary Python that can be tested without network access.
 
 ## Run the concrete search
 
-Stand up a venv, pip install the few deps, and export your key:
+Create an environment, install the small dependency set, and provide your key:
 
 ```bash
 python3 -m venv .venv
@@ -14,7 +14,7 @@ export INFRAI_API_KEY="your-key"
 python example_search.py
 ```
 
-The call queries `Who has my desk and what is the tracking number?`, scoped to buyer `buyer-42` and order `order-104`. We expect the top hit to be the `order_handoff` doc with carrier `North Parcel` and tracking ref `NP104`. Similarity numbers will follow whatever the embedding returns; don't assert on exact floats in a runbook.
+The example asks, `Who has my desk and what is the tracking number?`, for buyer `buyer-42` and order `order-104`. Its expected first result is the `order_handoff` document containing carrier `North Parcel` and tracking reference `NP104`; the exact similarity score depends on the embedding response.
 
 For the typed HTTP boundary, run:
 
@@ -22,13 +22,13 @@ For the typed HTTP boundary, run:
 uvicorn marketplace_service:app --reload
 ```
 
-Post `POST /search` using `query`, `buyer_id`, optional `order_id`, `limit`, and a `documents` list. Every doc comes back with `id`, `kind`, `text`, `seller_id`, plus optional `buyer_id` and `order_id`. Field `kind` must be one of `seller_asset`, `buyer_update`, or `order_handoff`. Validate that enum early; a bad value means a 400, not a silent miss.
+Send `POST /search` with `query`, `buyer_id`, optional `order_id`, `limit`, and a `documents` list. Each document carries `id`, `kind`, `text`, `seller_id`, and optional `buyer_id` and `order_id`; `kind` is one of `seller_asset`, `buyer_update`, or `order_handoff`.
 
 ## Why filtering precedes ranking
 
-Two designs tempt you. Rank first then drop private hits, and you get a sparse page or empty list when a buyer has few matches. Filter first, and the embedder only sees eligible docs; the privacy check sits at one function boundary where we can reason about it. Seller assets are public, buyer updates tie to their buyer id, and handoffs need both that buyer and the order.
+There are two tempting designs. Ranking everything and removing private hits afterward can leave a short or empty result page, whereas filtering first gives the embedder only eligible candidates and makes the privacy decision visible at one function boundary. Seller assets are public candidates, buyer updates belong to their named buyer, and order handoffs require both that buyer and the requested order.
 
-`marketplace_search.py` enforces that rule and does cosine ranking. `marketplace_service.py` maps typed request models to domain types. `example_search.py` is the fastest way to eyeball a real response during an incident.
+`marketplace_search.py` owns that rule and cosine ranking. `marketplace_service.py` translates typed request models into the domain types, while `example_search.py` is the shortest path for inspecting a real result.
 
 ## Verify the decision locally
 
@@ -36,7 +36,7 @@ Two designs tempt you. Rank first then drop private hits, and you get a sparse p
 pytest -q
 ```
 
-The test searches `tracking` acting as `buyer-1` under `order-1`. Assert ordered IDs `handoff-right-order` then `asset`. A higher-similarity update from a different buyer and a handoff from another order must be filtered before any vector math runs. Idempotent test: run it twice, same result.
+The focused test searches for `tracking` as `buyer-1` on `order-1`. The expected ordered IDs are `handoff-right-order` and `asset`; a more similar update owned by another buyer and a handoff from another order are excluded before vectors are ranked.
 
 ## License
 
@@ -44,7 +44,7 @@ MIT
 
 ## Wiring it up for real: Buyer Safe Marketplace Search
 
-The snippet above is copy-paste friendly. Before production, complete these **required** steps. Details below target Buyer Safe Marketplace Search.
+The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Buyer Safe Marketplace Search.
 
 **Account & key**
 
